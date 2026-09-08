@@ -21,9 +21,11 @@ public class GrimArrayListHud extends HudElement {
         GrimArrayListHud::new
     );
 
-    private final Color titleColor = new Color(255, 170, 0, 255);
-    private final Color moduleColor = new Color(135, 206, 250, 255);
+    // Cấu hình màu sắc hiển thị
+    private final Color titleColor = new Color(255, 170, 0, 255);   // Màu Vàng Cam cho tiêu đề
+    private final Color moduleColor = new Color(135, 206, 250, 255); // Màu Xanh Dương cho danh sách module
 
+    // Tiêu đề cột
     private static final String ADDON_NAME = "[ Project I Addon ]";
 
     public GrimArrayListHud() {
@@ -32,6 +34,7 @@ public class GrimArrayListHud extends HudElement {
 
     @Override
     public void render(HudRenderer renderer) {
+        // Lấy danh sách module thuộc Category "Anarchy 2y2c" đang kích hoạt
         List<Module> activeModules = new ArrayList<>();
         for (Module module : Modules.get().getGroup(AddonTemplate.ANARCHY_CATEGORY)) {
             if (module.isActive()) {
@@ -39,14 +42,17 @@ public class GrimArrayListHud extends HudElement {
             }
         }
 
+        // Sắp xếp các module theo độ dài tên
         activeModules.sort(Comparator.comparingdouble(m -> -renderer.textWidth(m.title)));
 
         double currentY = y;
         double maxWidth = renderer.textWidth(ADDON_NAME);
 
+        // 1. Vẽ tiêu đề cột [ Project I Addon ]
         renderer.text(ADDON_NAME, x, currentY, titleColor, true);
         currentY += renderer.textHeight() + 4;
 
+        // 2. Vẽ danh sách các module đang bật
         if (activeModules.isEmpty()) {
             if (isInEditor()) {
                 renderer.text("No Active Modules", x, currentY, Color.GRAY, true);
@@ -63,6 +69,7 @@ public class GrimArrayListHud extends HudElement {
             }
         }
 
+        // Cập nhật kích thước khung HUD
         setSize(maxWidth, currentY - y);
     }
 }
