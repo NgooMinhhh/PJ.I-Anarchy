@@ -1,0 +1,125 @@
+package com.example.addon.modules;
+
+import com.example.addon.AddonTemplate;
+import meteordevelopment.meteorclient.events.world.TickEvent;
+import meteordevelopment.meteorclient.settings.*;
+import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.utils.player.FindItemResult;
+import meteordevelopment.meteorclient.utils.player.InvUtils;
+import meteordevelopment.meteorclient.utils.player.Rotations;
+import meteordevelopment.orbit.EventHandler;
+import net.minecraft.item.Items;
+import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.Vec3d;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class GrimSurround extends Module {
+    private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+    private final Setting<Integer> height = sgGeneral.add(new IntSetting.Builder()
+            .name("height")
+            .description("Độ cao của tường Obsidian bao quanh (1 = ngang chân, 2 = ngang đầu, ...).")
+            .defaultValue(1)
+            .min(1)
+            .sliderMax(3)
+            .build());
+
+    private final Setting<Boolean> disableOnJump = sgGeneral.add(new BoolSetting.Builder()
+            .name("disable-on-jump")
+            .description("Tự tắt module khi nhảy lên.")
+            .defaultValue(true)
+            .build());
+
+    private final Setting<Boolean> silentRotation = sgGeneral.add(new BoolSetting.Builder()
+            .name("silent-rotation")
+            .description("Xoay góc nhìn Server-side để GrimAC không hủy thao tác đặt block.")
+            .defaultValue(true)
+            .build());
+
+    public GrimSurround() {
+        super(AddonTemplate.ANARCHY_CATEGORY, "GrimSurround", "Surround thông minh tự mở rộng 2x2/tăng chiều cao khi đứng lệch.");
+    }
+
+    @EventHandler
+    private void onTick(TickEvent.Pre event) {
+        if (mc.player == null || mc.world == null) return;
+
+        // Tự tắt khi nhảy hoặc rơi tự do
+        if (disableOnJump.get() && (mc.options.jumpKey.isPressed() || mc.player.fallDistance > 0.5)) {
+            toggle();
+            return;
+        }
+
+        FindItemResult obsidian = InvUtils.findInHotbar(Items.OBSIDIAN);
+        if (!obsidian.found()) return;
+
+        // Tính toán toàn bộ các vị trí cần đặt (đáy + tường bao xung quanh theo độ cao)
+        List<BlockPos> targetPositions = getDynamicSurroundPositions();
+
+        for (BlockPos pos : targetPositions) {
+            if (mc.world.getBlockState(pos).isReplaceable()) {
+                int prevSlot = mc.player.getInventory().selectedSlot;
+
+                InvUtils.swap(obsidian.slot(), false);
+                placeBlock(pos);
+                InvUtils.swap(prevSlot, false);
+            }
+        }
+    }
+
+    private List<BlockPos> getDynamicSurroundPositions() {
+        List<BlockPos> positions = new ArrayList<>();
+        Box bb = mc.player.getBoundingBox();
+
+        // Lấy phạm vi tọa độ thực tế mà Hitbox nhân vật đang đè lên
+        int minX = (int) Math.floor(bb.minX);
+        int maxX = (int) Math.floor(bb.maxX);
+        int minZ = (int) Math.floor(bb.minZ);
+        int maxZ = (int) Math.floor(bb.maxZ);
+        int minY = (int) Math.floor(bb.minY);
+
+        // 1. Đặt toàn bộ sàn dưới chân (Nếu đứng lệch 2x2 thì sàn tự thành 2x2)
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                positions.add(new BlockPos(x, minY - 1, z));
+            }
+        }
+
+        // 2. Đặt tường vây xung quanh theo độ cao tùy chỉnh (height)
+        for (int h = 0; h < height.get(); h++) {
+            int currentY = minY + h;
+
+            for (int x = minX - 1; x <= maxX + 1; x++) {
+                for (int z = minZ - 1; z <= maxZ + 1; z++) {
+                    // Bỏ qua khu vực không gian bên trong mà nhân vật đang đứng
+                    if (x >= minX && x <= maxX && z >= minZ && z <= maxZ) continue;
+
+                    positions.add(new BlockPos(x, currentY, z));
+                }
+            }
+        }
+
+        return positions;
+    }
+
+    private void placeBlock(BlockPos pos) {
+        Vec3d vec = Vec3d.ofCenter(pos);
+        Runnable placeTask = () -> {
+            BlockHitResult hitResult = new BlockHitResult(vec, Direction.UP, pos, false);
+            mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
+            mc.player.swingHand(Hand.MAIN_HAND);
+        };
+
+        if (silentRotation.get()) {
+            Rotations.rotate(Rotations.getYaw(vec), Rotations.getPitch(vec), placeTask);
+        } else {
+            placeTask.run();
+        }
+    }
+}
