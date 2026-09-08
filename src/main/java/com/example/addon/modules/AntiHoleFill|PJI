@@ -1,0 +1,48 @@
+package com.example.addon.modules;
+
+import com.example.addon.AddonTemplate;
+import meteordevelopment.meteorclient.events.world.TickEvent;
+import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.utils.player.FindItemResult;
+import meteordevelopment.meteorclient.utils.player.InvUtils;
+import meteordevelopment.meteorclient.utils.player.Rotations;
+import meteordevelopment.orbit.EventHandler;
+import net.minecraft.item.Items;
+import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.Vec3d;
+
+public class GrimAntiHoleFill extends Module {
+
+    public GrimAntiHoleFill() {
+        super(AddonTemplate.ANARCHY_CATEGORY, "AntiHoleFill", "Prevents enemy web/block trapping - Strict Placement.");
+    }
+
+    @EventHandler
+    private void onTick(TickEvent.Pre event) {
+        if (mc.player == null || mc.world == null) return;
+
+        BlockPos playerPos = mc.player.getBlockPos();
+
+        if (mc.world.getBlockState(playerPos).isAir()) {
+            FindItemResult plate = InvUtils.findInHotbar(Items.OAK_PRESSURE_PLATE, Items.STONE_PRESSURE_PLATE, Items.OAK_BUTTON);
+            if (plate.found()) {
+                BlockPos floorPos = playerPos.down();
+                if (!mc.world.getBlockState(floorPos).isAir() && !mc.world.getBlockState(floorPos).isReplaceable()) {
+                    Vec3d hitVec = Vec3d.ofCenter(floorPos).add(0, 0.5, 0);
+
+                    int prevSlot = mc.player.getInventory().selectedSlot;
+                    Rotations.rotate(Rotations.getYaw(hitVec), Rotations.getPitch(hitVec), () -> {
+                        InvUtils.swap(plate.slot(), false);
+                        BlockHitResult hit = new BlockHitResult(hitVec, Direction.UP, floorPos, false);
+                        mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hit);
+                        mc.player.swingHand(Hand.MAIN_HAND);
+                        InvUtils.swap(prevSlot, false);
+                    });
+                }
+            }
+        }
+    }
+}
