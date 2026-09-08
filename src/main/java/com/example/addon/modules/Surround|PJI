@@ -21,10 +21,12 @@ import java.util.List;
 
 public class GrimSurround extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
+    private final SettingGroup sgGrim = settings.createGroup("GrimAC / 2y2c Bypass");
 
+    // General Settings
     private final Setting<Integer> height = sgGeneral.add(new IntSetting.Builder()
             .name("height")
-            .description("Độ cao của tường Obsidian bao quanh (1 = ngang chân, 2 = ngang đầu, ...).")
+            .description("Độ cao của tường Obsidian bao quanh (1 = ngang chân, 2 = ngang đầu).")
             .defaultValue(1)
             .min(1)
             .sliderMax(3)
@@ -36,14 +38,38 @@ public class GrimSurround extends Module {
             .defaultValue(true)
             .build());
 
-    private final Setting<Boolean> silentRotation = sgGeneral.add(new BoolSetting.Builder()
+    // GrimAC Bypass Settings
+    private final Setting<Integer> blocksPerTick = sgGrim.add(new IntSetting.Builder()
+            .name("blocks-per-tick")
+            .description("Số block đặt tối đa trong 1 tick để tránh bị GrimAC hủy block (Khuyên dùng: 2 - 3).")
+            .defaultValue(2)
+            .min(1)
+            .sliderMax(5)
+            .build());
+
+    private final Setting<Integer> placeDelay = sgGrim.add(new IntSetting.Builder()
+            .name("place-delay-ticks")
+            .description("Độ trễ giữa các lần đặt (tính bằng tick). 0 = đặt liên tục mỗi tick.")
+            .defaultValue(0)
+            .min(0)
+            .sliderMax(5)
+            .build());
+
+    private final Setting<Boolean> silentRotation = sgGrim.add(new BoolSetting.Builder()
             .name("silent-rotation")
-            .description("Xoay góc nhìn Server-side để GrimAC không hủy thao tác đặt block.")
+            .description("Xoay góc nhìn Server-side để GrimAC nhận diện vị trí tương tác chuẩn.")
             .defaultValue(true)
             .build());
 
+    private int timer = 0;
+
     public GrimSurround() {
-        super(AddonTemplate.ANARCHY_CATEGORY, "GrimSurround", "Surround thông minh tự mở rộng 2x2/tăng chiều cao khi đứng lệch.");
+        super(AddonTemplate.ANARCHY_CATEGORY, "GrimSurround", "Surround 2x2 thông minh kiểm soát tốc độ đặt né GrimAC 2y2c.");
+    }
+
+    @Override
+    public void onActivate() {
+        timer = 0;
     }
 
     @EventHandler
@@ -56,11 +82,17 @@ public class GrimSurround extends Module {
             return;
         }
 
+        // Xử lý Cooldown giữa các lần đặt
+        if (timer > 0) {
+            timer--;
+            return;
+        }
+
         FindItemResult obsidian = InvUtils.findInHotbar(Items.OBSIDIAN);
         if (!obsidian.found()) return;
 
-        // Tính toán toàn bộ các vị trí cần đặt (đáy + tường bao xung quanh theo độ cao)
         List<BlockPos> targetPositions = getDynamicSurroundPositions();
+        int placedCount = 0;
 
         for (BlockPos pos : targetPositions) {
             if (mc.world.getBlockState(pos).isReplaceable()) {
@@ -69,6 +101,14 @@ public class GrimSurround extends Module {
                 InvUtils.swap(obsidian.slot(), false);
                 placeBlock(pos);
                 InvUtils.swap(prevSlot, false);
+
+                placedCount++;
+
+                // Giới hạn số block đặt trong 1 tick để né GrimAC
+                if (placedCount >= blocksPerTick.get()) {
+                    timer = placeDelay.get();
+                    break;
+                }
             }
         }
     }
@@ -77,29 +117,26 @@ public class GrimSurround extends Module {
         List<BlockPos> positions = new ArrayList<>();
         Box bb = mc.player.getBoundingBox();
 
-        // Lấy phạm vi tọa độ thực tế mà Hitbox nhân vật đang đè lên
         int minX = (int) Math.floor(bb.minX);
         int maxX = (int) Math.floor(bb.maxX);
         int minZ = (int) Math.floor(bb.minZ);
         int maxZ = (int) Math.floor(bb.maxZ);
         int minY = (int) Math.floor(bb.minY);
 
-        // 1. Đặt toàn bộ sàn dưới chân (Nếu đứng lệch 2x2 thì sàn tự thành 2x2)
+        // 1. Đặt sàn dưới chân (tự động nở rộng 2x2 nếu đứng đè ranh giới)
         for (int x = minX; x <= maxX; x++) {
             for (int z = minZ; z <= maxZ; z++) {
                 positions.add(new BlockPos(x, minY - 1, z));
             }
         }
 
-        // 2. Đặt tường vây xung quanh theo độ cao tùy chỉnh (height)
+        // 2. Đặt tường vây xung quanh theo chiều cao
         for (int h = 0; h < height.get(); h++) {
             int currentY = minY + h;
 
             for (int x = minX - 1; x <= maxX + 1; x++) {
                 for (int z = minZ - 1; z <= maxZ + 1; z++) {
-                    // Bỏ qua khu vực không gian bên trong mà nhân vật đang đứng
                     if (x >= minX && x <= maxX && z >= minZ && z <= maxZ) continue;
-
                     positions.add(new BlockPos(x, currentY, z));
                 }
             }
