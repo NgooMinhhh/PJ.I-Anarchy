@@ -1,0 +1,28 @@
+package com.example.addon.modules;
+
+import com.example.addon.AddonTemplate;
+import meteordevelopment.meteorclient.events.world.TickEvent;
+import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.orbit.EventHandler;
+import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
+
+public class GrimNoSlow extends Module {
+
+    public GrimNoSlow() {
+        super(AddonTemplate.ANARCHY_CATEGORY, "GrimNoSlow", "Bypass NoSlowdown for 2y2c GrimAC.");
+    }
+
+    @EventHandler
+    private void onTick(TickEvent.Pre event) {
+        if (mc.player == null || mc.world == null) return;
+
+        // Nếu đang sử dụng item (ăn táo, giương cung, v.v.)
+        if (mc.player.isUsingItem() && !mc.player.hasVehicle()) {
+            int slot = mc.player.getInventory().selectedSlot;
+            
+            // Gửi packet đổi slot giả rồi quay lại để bypass GrimAC Movement Check
+            mc.player.networkHandler.sendPacket(new UpdateSelectedSlotC2SPacket((slot + 1) % 9));
+            mc.player.networkHandler.sendPacket(new UpdateSelectedSlotC2SPacket(slot));
+        }
+    }
+}
