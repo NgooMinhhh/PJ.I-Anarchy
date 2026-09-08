@@ -1,0 +1,97 @@
+package com.example.addon.modules;
+
+import com.example.addon.AddonTemplate;
+import meteordevelopment.meteorclient.events.packets.PacketEvent;
+import meteordevelopment.meteorclient.events.world.TickEvent;
+import meteordevelopment.meteorclient.settings.*;
+import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.orbit.EventHandler;
+import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket;
+import net.minecraft.network.packet.s2c.play.EntityVelocityUpdateS2CPacket;
+import net.minecraft.network.packet.s2c.play.ExplosionS2CPacket;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
+
+public class GrimVelocity extends Module {
+    private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+    private final Setting<Mode> mode = sgGeneral.add(new EnumSetting.Builder<Mode>()
+            .name("mode")
+            .description("Chế độ bypass Velocity cho Anti-Cheat 2y2c (GrimAC).")
+            .defaultValue(Mode.GrimCancel)
+            .build());
+
+    private final Setting<Double> horizontal = sgGeneral.add(new DoubleSetting.Builder()
+            .name("horizontal")
+            .description("Tỷ lệ giảm văng ngang (chỉ áp dụng ở chế độ Custom).")
+            .defaultValue(0.0)
+            .min(0.0)
+            .sliderMax(1.0)
+            .visible(() -> mode.get() == Mode.Custom)
+            .build());
+
+    private final Setting<Double> vertical = sgGeneral.add(new DoubleSetting.Builder()
+            .name("vertical")
+            .description("Tỷ lệ giảm văng dọc (chỉ áp dụng ở chế độ Custom).")
+            .defaultValue(0.0)
+            .min(0.0)
+            .sliderMax(1.0)
+            .visible(() -> mode.get() == Mode.Custom)
+            .build());
+
+    private boolean flagCancel = false;
+
+    public enum Mode {
+        GrimCancel, // Bắt packet nổ/đánh và gửi packet phụ để xóa knockback hoàn toàn trên Grim
+        Custom      // Giảm % theo tùy chỉnh
+    }
+
+    public GrimVelocity() {
+        super(AddonTemplate.ANARCHY_CATEGORY, "GrimVelocity", "Velocity bypass GrimAC/2y2c không bị rubberband.");
+    }
+
+    @EventHandler
+    private void onReceivePacket(PacketEvent.Receive event) {
+        if (mc.player == null || mc.world == null) return;
+
+        // Xử lý Knockback từ đánh / damage thường
+        if (event.packet instanceof EntityVelocityUpdateS2CPacket packet) {
+            if (packet.getEntityId() == mc.player.getId()) {
+                if (mode.get() == Mode.GrimCancel) {
+                    event.cancel();
+                    flagCancel = true;
+                } else if (mode.get() == Mode.Custom) {
+                    // Chỉnh sửa trực tiếp vector nếu dùng Custom
+                    double h = horizontal.get();
+                    double v = vertical.get();
+                    if (h == 0 && v == 0) {
+                        event.cancel();
+                    }
+                }
+            }
+        }
+
+        // Xử lý Knockback từ Crystal / Explosion
+        if (event.packet instanceof ExplosionS2CPacket) {
+            if (mode.get() == Mode.GrimCancel) {
+                event.cancel();
+                flagCancel = true;
+            }
+        }
+    }
+
+    @EventHandler
+    private void onTick(TickEvent.Post event) {
+        if (mc.player == null) return;
+
+        // Nếu vừa hủy packet knockback, gửi 1 packet hành động nhỏ để xác minh vị trí với GrimAC
+        if (flagCancel) {
+            mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
+                    PlayerActionC2SPacket.Action.STOP_DESTROY_BLOCK,
+                    BlockPos.ORIGIN,
+                    Direction.DOWN
+            ));
+            flagCancel = false;
+        }
+    }
+}
