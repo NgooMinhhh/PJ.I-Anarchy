@@ -1,0 +1,202 @@
+package com.example.addon.modules;
+
+import com.example.addon.AddonTemplate;
+import meteordevelopment.meteorclient.events.world.TickEvent;
+import meteordevelopment.meteorclient.settings.*;
+import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.utils.player.FindItemResult;
+import meteordevelopment.meteorclient.utils.player.InvUtils;
+import meteordevelopment.meteorclient.utils.player.Rotations;
+import meteordevelopment.meteorclient.utils.world.TickRate;
+import meteordevelopment.orbit.EventHandler;
+import net.minecraft.block.Blocks;
+import net.minecraft.entity.decoration.EndCrystalEntity;
+import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.item.Items;
+import net.minecraft.network.packet.c2s.play.PlayerInteractEntityC2SPacket;
+import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.Vec3d;
+
+public class CrystalAuraPlus extends Module {
+    private final SettingGroup sgGeneral = settings.getDefaultGroup();
+    private final SettingGroup sg2y2c = settings.createGroup("2y2c / GrimAC Speed");
+    private final SettingGroup sgSafety = settings.createGroup("Safety");
+
+    // General Settings
+    private final Setting<Double> targetRange = sgGeneral.add(new DoubleSetting.Builder()
+            .name("target-range")
+            .description("Tầm xa quét mục tiêu.")
+            .defaultValue(10.0)
+            .min(1.0)
+            .sliderMax(15.0)
+            .build());
+
+    private final Setting<Boolean> predictMovement = sgGeneral.add(new BoolSetting.Builder()
+            .name("predict-movement")
+            .description("Dự đoán hướng di chuyển của đối thủ.")
+            .defaultValue(true)
+            .build());
+
+    // 2y2c Speed & Rotation Settings
+    private final Setting<Integer> packetsPerTick = sg2y2c.add(new IntSetting.Builder()
+            .name("packets-per-tick")
+            .description("Số packet/tick tối ưu cho 2y2c (Nên để 2 để không bị hụt dam/GrimAC cancel).")
+            .defaultValue(2)
+            .min(1)
+            .sliderMax(3)
+            .build());
+
+    private final Setting<Boolean> silentRotation = sg2y2c.add(new BoolSetting.Builder()
+            .name("silent-rotation")
+            .description("Xoay góc nhìn ẩn (Server vẫn nhận diện chính xác nhưng camera không bị xoay).")
+            .defaultValue(true)
+            .build());
+
+    private final Setting<Boolean> tpsSync = sg2y2c.add(new BoolSetting.Builder()
+            .name("tps-sync")
+            .description("Điều chỉnh nhịp theo TPS thực tế của 2y2c.")
+            .defaultValue(true)
+            .build());
+
+    // Safety Settings
+    private final Setting<Boolean> antiSuicide = sgSafety.add(new BoolSetting.Builder()
+            .name("anti-suicide")
+            .description("Tự dừng khi máu thấp để tránh tự nổ chết.")
+            .defaultValue(true)
+            .build());
+
+    private final Setting<Double> minHealth = sgSafety.add(new DoubleSetting.Builder()
+            .name("min-health")
+            .description("Máu tối thiểu để giữ an toàn.")
+            .defaultValue(8.0)
+            .min(1.0)
+            .sliderMax(36.0)
+            .build());
+
+    public CrystalAuraPlus() {
+        super(AddonTemplate.ANARCHY_CATEGORY, "CrystalAura+", "Fast CatLean-style CrystalAura with Silent Rotation for 2y2c.");
+    }
+
+    @EventHandler
+    private void onTick(TickEvent.Pre event) {
+        if (mc.player == null || mc.world == null) return;
+
+        // Bỏ qua nếu TPS 2y2c rơi xuống quá thấp để tránh bị rubberband
+        if (tpsSync.get() && TickRate.INSTANCE.getTickRate() < 10.0f) return;
+
+        // Kiểm tra máu an toàn
+        float totalHealth = mc.player.getHealth() + mc.player.getAbsorptionAmount();
+        if (antiSuicide.get() && totalHealth <= minHealth.get()) return;
+
+        PlayerEntity target = getTarget();
+        if (target == null) return;
+
+        // 1. Thực hiện Đập Crystal ở khoảng cách tối ưu
+        doOptimalBreak();
+
+        // 2. Thực hiện Đặt Crystal đón đầu tốc độ cao
+        doPredictivePlace(target);
+    }
+
+    private PlayerEntity getTarget() {
+        PlayerEntity nearest = null;
+        double minDistance = targetRange.get();
+
+        for (PlayerEntity player : mc.world.getPlayers()) {
+            if (player == mc.player || player.isDead() || !player.isAlive()) continue;
+            double dist = mc.player.distanceTo(player);
+            if (dist < minDistance) {
+                minDistance = dist;
+                nearest = player;
+            }
+        }
+        return nearest;
+    }
+
+    private void doOptimalBreak() {
+        int count = 0;
+
+        for (net.minecraft.entity.Entity entity : mc.world.getEntities()) {
+            if (entity instanceof EndCrystalEntity crystal && mc.player.distanceTo(crystal) <= 5.0) {
+                Vec3d vec = crystal.getPos();
+
+                Runnable attackTask = () -> {
+                    for (int i = 0; i < packetsPerTick.get(); i++) {
+                        mc.player.networkHandler.sendPacket(PlayerInteractEntityC2SPacket.attack(crystal, mc.player.isSneaking()));
+                    }
+                    mc.player.swingHand(Hand.MAIN_HAND);
+                };
+
+                // Xoay góc nhìn Server-side (Silent) để GrimAC chấp nhận hit
+                if (silentRotation.get()) {
+                    Rotations.rotate(Rotations.getYaw(vec), Rotations.getPitch(vec), attackTask);
+                } else {
+                    attackTask.run();
+                }
+
+                count++;
+                if (count >= packetsPerTick.get()) break;
+            }
+        }
+    }
+
+    private void doPredictivePlace(PlayerEntity target) {
+        FindItemResult crystalItem = InvUtils.findInHotbar(Items.END_CRYSTAL);
+        if (!crystalItem.found()) return;
+
+        Vec3d targetVelocity = target.getVelocity();
+        BlockPos targetPos = target.getBlockPos();
+
+        // Tính toán vị trí di chuyển tiếp theo của đối thủ
+        if (predictMovement.get() && (Math.abs(targetVelocity.x) > 0.03 || Math.abs(targetVelocity.z) > 0.03)) {
+            double predictX = target.getX() + (targetVelocity.x * 2.8);
+            double predictZ = target.getZ() + (targetVelocity.z * 2.8);
+            targetPos = new BlockPos((int) Math.floor(predictX), (int) Math.floor(target.getY()), (int) Math.floor(predictZ));
+        }
+
+        BlockPos[] placePositions = new BlockPos[] {
+            targetPos.down(),
+            targetPos.north().down(),
+            targetPos.south().down(),
+            targetPos.east().down(),
+            targetPos.west().down()
+        };
+
+        for (BlockPos pos : placePositions) {
+            if (canPlaceCrystal(pos)) {
+                int prevSlot = mc.player.getInventory().selectedSlot;
+
+                InvUtils.swap(crystalItem.slot(), false);
+
+                placeCrystalSilent(pos);
+
+                InvUtils.swap(prevSlot, false);
+                break;
+            }
+        }
+    }
+
+    private boolean canPlaceCrystal(BlockPos pos) {
+        if (!mc.world.getBlockState(pos).isOf(Blocks.OBSIDIAN) && !mc.world.getBlockState(pos).isOf(Blocks.BEDROCK)) {
+            return false;
+        }
+        return mc.world.getBlockState(pos.up()).isAir();
+    }
+
+    private void placeCrystalSilent(BlockPos pos) {
+        Vec3d vec = Vec3d.ofCenter(pos);
+        Runnable placeTask = () -> {
+            BlockHitResult hitResult = new BlockHitResult(vec, Direction.UP, pos, false);
+            mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
+        };
+
+        if (silentRotation.get()) {
+            Rotations.rotate(Rotations.getYaw(vec), Rotations.getPitch(vec), placeTask);
+        } else {
+            placeTask.run();
+        }
+    }
+}
