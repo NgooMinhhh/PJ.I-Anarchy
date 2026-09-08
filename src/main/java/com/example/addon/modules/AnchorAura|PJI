@@ -1,0 +1,142 @@
+package com.example.addon.modules;
+
+import com.example.addon.AddonTemplate;
+import meteordevelopment.meteorclient.events.world.TickEvent;
+import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.utils.player.FindItemResult;
+import meteordevelopment.meteorclient.utils.player.InvUtils;
+import meteordevelopment.meteorclient.utils.player.Rotations;
+import meteordevelopment.orbit.EventHandler;
+import net.minecraft.block.Blocks;
+import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.item.Items;
+import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.Vec3d;
+
+public class GrimAnchor extends Module {
+
+    // Giới hạn an toàn
+    private static final float MAX_SELF_DAMAGE = 10.0f; // Không nổ nếu gây quá 10 dam (5 tim) cho bản thân
+    private static final float MIN_HEALTH_TO_ANCHOR = 8.0f; // Dưới 8 HP dừng nổ để tránh tự sát
+
+    public GrimAnchor() {
+        super(AddonTemplate.ANARCHY_CATEGORY, "GrimAnchor", "Fast Safe Respawn Anchor for 2y2c GrimAC.");
+    }
+
+    @EventHandler
+    private void onTick(TickEvent.Pre event) {
+        if (mc.player == null || mc.world == null) return;
+
+        // 1. Kiểm tra máu bản thân - Nếu quá thấp thì ngắt hoàn toàn để bảo vệ Totem
+        float myHealth = mc.player.getHealth() + mc.player.getAbsorptionAmount();
+        if (myHealth <= MIN_HEALTH_TO_ANCHOR) return;
+
+        PlayerEntity target = getTarget();
+        if (target == null) return;
+
+        BlockPos targetPos = target.getBlockPos();
+        BlockPos[] anchorPositions = new BlockPos[] {
+            targetPos.up(2),
+            targetPos.north(),
+            targetPos.south(),
+            targetPos.east(),
+            targetPos.west()
+        };
+
+        FindItemResult anchor = InvUtils.findInHotbar(Items.RESPAWN_ANCHOR);
+        FindItemResult glowstone = InvUtils.findInHotbar(Items.GLOWSTONE);
+
+        if (!anchor.found() || !glowstone.found()) return;
+
+        for (BlockPos pos : anchorPositions) {
+            // Check khoảng cách an toàn cho bản thân trước khi tương tác
+            double selfDistance = mc.player.squaredDistanceTo(Vec3d.ofCenter(pos));
+            
+            // 2. Safe Anchor Check: Nếu vị trí Anchor quá gần bản thân (< 2.2m) gây nổ chết -> Bỏ qua vị trí này
+            if (selfDistance <= 4.84) continue; 
+
+            // Nếu khối đã là Respawn Anchor -> Nạp & Nổ an toàn
+            if (mc.world.getBlockState(pos).isOf(Blocks.RESPAWN_ANCHOR)) {
+                interactAnchorStrict(pos, glowstone.slot()); // Nạp Glowstone
+                
+                // Chỉ kích nổ nếu không gây nguy hiểm cho bản thân
+                if (isSafeToExplode(pos, myHealth)) {
+                    FindItemResult totemOrSlot = InvUtils.findInHotbar(Items.TOTEM_OF_UNDYING);
+                    int explodeSlot = totemOrSlot.found() ? totemOrSlot.slot() : glowstone.slot();
+                    interactAnchorStrict(pos, explodeSlot); // Kích nổ
+                }
+                break;
+            } 
+            // Nếu là ô trống -> Đặt Anchor theo cơ chế Strict Neighbor Placement (No Air Place)
+            else if (mc.world.getBlockState(pos).isAir()) {
+                if (placeBlockStrict(pos, anchor.slot())) break;
+            }
+        }
+    }
+
+    private boolean isSafeToExplode(BlockPos anchorPos, float currentHealth) {
+        double distToPlayer = mc.player.distanceToToEntity(mc.player) + mc.player.squaredDistanceTo(Vec3d.ofCenter(anchorPos));
+        
+        // Ước tính sát thương Anchor dựa trên khoảng cách (Anchor gây xấp xỉ ~12-15 dam ở khoảng cách cận chiến)
+        float estimatedSelfDamage = (float) (14.0 / Math.max(1.0, Math.sqrt(distToPlayer)));
+
+        // Safe condition: Sát thương lên bản thân nhỏ hơn MAX_SELF_DAMAGE và không làm tụt HP xuống dưới ngưỡng chết
+        return (estimatedSelfDamage < MAX_SELF_DAMAGE) && ((currentHealth - estimatedSelfDamage) > 4.0f);
+    }
+
+    private PlayerEntity getTarget() {
+        PlayerEntity nearest = null;
+        double minDistance = 5.0; // Khoảng cách tối đa để Anchor đối thủ
+        for (PlayerEntity player : mc.world.getPlayers()) {
+            if (player == mc.player || player.isDead() || !player.isAlive()) continue;
+            double dist = mc.player.distanceTo(player);
+            if (dist < minDistance) {
+                minDistance = dist;
+                nearest = player;
+            }
+        }
+        return nearest;
+    }
+
+    private boolean placeBlockStrict(BlockPos pos, int slot) {
+        for (Direction side : Direction.values()) {
+            BlockPos neighbor = pos.offset(side);
+            Direction sideOpposite = side.getOpposite();
+
+            if (!mc.world.getBlockState(neighbor).isAir() && !mc.world.getBlockState(neighbor).isReplaceable()) {
+                Vec3d hitVec = Vec3d.ofCenter(neighbor).add(
+                    sideOpposite.getOffsetX() * 0.5,
+                    sideOpposite.getOffsetY() * 0.5,
+                    sideOpposite.getOffsetZ() * 0.5
+                );
+
+                int prevSlot = mc.player.getInventory().selectedSlot;
+                Rotations.rotate(Rotations.getYaw(hitVec), Rotations.getPitch(hitVec), () -> {
+                    InvUtils.swap(slot, false);
+                    BlockHitResult hitResult = new BlockHitResult(hitVec, sideOpposite, neighbor, false);
+                    mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
+                    mc.player.swingHand(Hand.MAIN_HAND);
+                    InvUtils.swap(prevSlot, false);
+                });
+
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void interactAnchorStrict(BlockPos pos, int slot) {
+        Vec3d hitVec = Vec3d.ofCenter(pos);
+        int prevSlot = mc.player.getInventory().selectedSlot;
+        Rotations.rotate(Rotations.getYaw(hitVec), Rotations.getPitch(hitVec), () -> {
+            InvUtils.swap(slot, false);
+            BlockHitResult hit = new BlockHitResult(hitVec, Direction.UP, pos, false);
+            mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hit);
+            mc.player.swingHand(Hand.MAIN_HAND);
+            InvUtils.swap(prevSlot, false);
+        });
+    }
+}
