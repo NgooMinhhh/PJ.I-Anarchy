@@ -1,0 +1,87 @@
+package com.example.addon.modules;
+
+import com.example.addon.AddonTemplate;
+import meteordevelopment.meteorclient.events.world.TickEvent;
+import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.utils.player.FindItemResult;
+import meteordevelopment.meteorclient.utils.player.InvUtils;
+import meteordevelopment.meteorclient.utils.player.Rotations;
+import meteordevelopment.orbit.EventHandler;
+import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.item.Items;
+import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.Vec3d;
+
+public class GrimPistonCrystalling extends Module {
+
+    public GrimPistonCrystalling() {
+        super(AddonTemplate.ANARCHY_CATEGORY, "PistonCrystalling", "Breaks enemy Surround using Piston - No Air Place.");
+    }
+
+    @EventHandler
+    private void onTick(TickEvent.Pre event) {
+        if (mc.player == null || mc.world == null) return;
+
+        PlayerEntity target = getTarget();
+        if (target == null) return;
+
+        FindItemResult piston = InvUtils.findInHotbar(Items.PISTON);
+        FindItemResult redstone = InvUtils.findInHotbar(Items.REDSTONE_BLOCK);
+
+        if (!piston.found() || !redstone.found()) return;
+
+        BlockPos targetHead = target.getBlockPos().up();
+        BlockPos pistonPos = targetHead.north();
+        BlockPos redstonePos = pistonPos.north();
+
+        if (mc.world.getBlockState(pistonPos).isAir() && mc.world.getBlockState(redstonePos).isAir()) {
+            if (placeBlockStrict(pistonPos, piston.slot())) {
+                placeBlockStrict(redstonePos, redstone.slot());
+            }
+        }
+    }
+
+    private PlayerEntity getTarget() {
+        PlayerEntity nearest = null;
+        double minDistance = 5.0;
+        for (PlayerEntity player : mc.world.getPlayers()) {
+            if (player == mc.player || player.isDead() || !player.isAlive()) continue;
+            double dist = mc.player.distanceTo(player);
+            if (dist < minDistance) {
+                minDistance = dist;
+                nearest = player;
+            }
+        }
+        return nearest;
+    }
+
+    private boolean placeBlockStrict(BlockPos pos, int slot) {
+        for (Direction side : Direction.values()) {
+            BlockPos neighbor = pos.offset(side);
+            Direction sideOpposite = side.getOpposite();
+
+            if (!mc.world.getBlockState(neighbor).isAir() && !mc.world.getBlockState(neighbor).isReplaceable()) {
+                Vec3d hitVec = Vec3d.ofCenter(neighbor).add(
+                    sideOpposite.getOffsetX() * 0.5,
+                    sideOpposite.getOffsetY() * 0.5,
+                    sideOpposite.getOffsetZ() * 0.5
+                );
+
+                int prevSlot = mc.player.getInventory().selectedSlot;
+                Rotations.rotate(Rotations.getYaw(hitVec), Rotations.getPitch(hitVec), () -> {
+                    InvUtils.swap(slot, false);
+                    BlockHitResult hitResult = new BlockHitResult(hitVec, sideOpposite, neighbor, false);
+                    mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
+                    mc.player.swingHand(Hand.MAIN_HAND);
+                    InvUtils.swap(prevSlot, false);
+                });
+
+                return true;
+            }
+        }
+        return false;
+    }
+}
